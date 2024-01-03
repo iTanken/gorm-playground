@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 // GORM_REPO: https://github.com/iTanken/gorm.git
@@ -59,5 +61,73 @@ func TestExplain(t *testing.T) {
 				t.Errorf("Explain gotSQL = %v, want %v", gotSQL, tt.wantSQL)
 			}
 		})
+	}
+}
+
+type UserPreloadWithSpecificModel struct {
+	gorm.Model
+	Username string
+	Orders   []OrderPreloadWithSpecificModel `gorm:"foreignKey:UserID;references:ID"`
+}
+
+type CustomUserRes struct {
+	ID       uint                            `gorm:"primaryKey"`
+	Username string                          // <--- No gorm default fields required
+	Orders   []OrderPreloadWithSpecificModel `gorm:"foreignKey:UserID;references:ID"`
+}
+
+type OrderPreloadWithSpecificModel struct {
+	gorm.Model
+	UserID uint `json:"user_id"`
+	Price  float64
+	Detail string
+}
+
+type CustomOrderRes struct {
+	UserID uint `json:"user_id_custom"` // <--- Custom json key name
+	Price  float64
+	// Detail string <--- Notice that Detail Attribute is not required here
+}
+
+func TestPreloadWithSpecificModel(t *testing.T) {
+	_ = DB.Migrator().DropTable(&UserPreloadWithSpecificModel{}, &OrderPreloadWithSpecificModel{})
+	if err := DB.Migrator().AutoMigrate(&UserPreloadWithSpecificModel{}, &OrderPreloadWithSpecificModel{}); err != nil {
+		t.Fatal(err)
+	}
+	user := UserPreloadWithSpecificModel{Username: "someone"}
+	if err := DB.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if user.ID == 0 {
+		if err := DB.Where(&user).First(&user).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Logf("got user: %+v", user)
+
+	order := OrderPreloadWithSpecificModel{UserID: user.ID, Price: 999, Detail: "test order"}
+	if err := DB.Create(&order).Error; err != nil {
+		t.Fatal(err)
+	}
+	if order.ID == 0 {
+		if err := DB.Where(&order).First(&order).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Logf("got order: %+v", user)
+	println("------------------------------------------------------------")
+
+	var userCustom CustomUserRes
+	var ordersCustom CustomOrderRes
+	db := DB.Preload("Orders", func(tx *gorm.DB) *gorm.DB {
+		return tx.Model(order).Scan(&ordersCustom) // <--- I want to fit the preload result to ordersCustom
+	}).Model(&user).First(&userCustom)
+	if err := db.Error; err != nil {
+		t.Fatal(err)
+	}
+	if ordersCustom.UserID == order.UserID {
+		t.Logf("got order: %+v", ordersCustom)
+	} else {
+		t.Errorf("got user ID is %d, want %d", ordersCustom.UserID, order.UserID)
 	}
 }
